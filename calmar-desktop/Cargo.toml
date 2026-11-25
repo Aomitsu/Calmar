@@ -7,3 +7,5 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+calmar.workspace = true
+iced = "0.14.0"

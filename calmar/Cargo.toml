@@ -1,9 +1,19 @@
 [package]
 name = "calmar"
 description = "Markdown note vault with Git-backed history"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
+git2 = { version = "0.21", default-features = false, features = [
+    "vendored-libgit2",
+] }
+thiserror = "2.0.21"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.2.3"
+dunce = "1.0.5"
+
+[dev-dependencies]
+tempfile = "3.27"

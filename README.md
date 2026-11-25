@@ -10,7 +10,7 @@ The notes can be linked to each other using Markdown links.
 
 ## Status
 
-Early. Nothing interessant yet !
+Early. Nothing interesting yet!
 
 ## Layout
 
