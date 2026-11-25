@@ -27,3 +27,4 @@ The use of generative AI is permitted. However, contributors remain fully respon
 
 GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`).
 See [LICENSE](LICENSE.md) for the full text.
+Third-party components and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
