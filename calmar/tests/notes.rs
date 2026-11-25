@@ -164,3 +164,94 @@ fn pending_changes_are_detected_and_can_be_committed() {
     assert_eq!(commit.to_hex().len(), 40);
     assert!(!vault.has_pending_changes().unwrap());
 }
+
+#[test]
+fn folders_lists_the_directories_of_the_vault() {
+    let tmp = tempdir().unwrap();
+    let mut vault = Vault::create(tmp.path().join("vault")).unwrap();
+
+    vault.create_dir("projets/calmar").unwrap();
+    vault.write_file("projets/calmar/notes.md", "n").unwrap();
+    vault.write_file("index.md", "i").unwrap();
+
+    assert_eq!(vault.folders().unwrap(), ["projets", "projets/calmar"]);
+}
+
+#[test]
+fn folders_include_notes_dir_and_its_parents() {
+    let tmp = tempdir().unwrap();
+    let path = tmp.path().join("vault");
+    Vault::create(&path).unwrap();
+
+    std::fs::write(
+        path.join(".calmar/config.toml"),
+        "notes_dir = \"a/notes\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(path.join("a/notes/sub")).unwrap();
+
+    let vault = Vault::open(&path).unwrap();
+
+    assert_eq!(vault.folders().unwrap(), ["a", "a/notes", "a/notes/sub"]);
+}
+
+#[test]
+fn renaming_a_folder_moves_notes_and_rewrites_links() {
+    let tmp = tempdir().unwrap();
+    let mut vault = Vault::create(tmp.path().join("vault")).unwrap();
+
+    vault.write_file("projets/calmar.md", "# Calmar\n").unwrap();
+    vault
+        .write_file("index.md", "[c](projets/calmar.md)\n")
+        .unwrap();
+
+    vault.rename_dir("projets", "archive").unwrap();
+
+    assert!(vault.root().join("archive/calmar.md").is_file());
+    assert!(!vault.root().join("projets").exists());
+    assert_eq!(vault.read("index.md").unwrap(), "[c](archive/calmar.md)\n");
+    assert_eq!(vault.backlinks("archive/calmar.md").unwrap(), ["index.md"]);
+}
+
+#[test]
+fn renaming_a_folder_recomputes_links_that_leave_it() {
+    let tmp = tempdir().unwrap();
+    let mut vault = Vault::create(tmp.path().join("vault")).unwrap();
+
+    vault.write_file("index.md", "i").unwrap();
+    vault
+        .write_file("a/b/note.md", "[root](../../index.md)\n")
+        .unwrap();
+
+    vault.rename_dir("a", "deep/a").unwrap();
+
+    assert_eq!(
+        vault.read("deep/a/b/note.md").unwrap(),
+        "[root](../../../index.md)\n"
+    );
+}
+
+#[test]
+fn a_folder_cannot_be_moved_inside_itself() {
+    let tmp = tempdir().unwrap();
+    let mut vault = Vault::create(tmp.path().join("vault")).unwrap();
+    vault.create_dir("a").unwrap();
+
+    assert!(matches!(
+        vault.rename_dir("a", "a/b"),
+        Err(VaultError::InvalidPath { .. })
+    ));
+}
+
+#[test]
+fn renaming_a_folder_refuses_to_overwrite() {
+    let tmp = tempdir().unwrap();
+    let mut vault = Vault::create(tmp.path().join("vault")).unwrap();
+    vault.create_dir("a").unwrap();
+    vault.create_dir("b").unwrap();
+
+    assert!(matches!(
+        vault.rename_dir("a", "b"),
+        Err(VaultError::AlreadyExists { .. })
+    ));
+}

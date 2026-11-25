@@ -3,6 +3,7 @@
 //! Everything is expressed in vault terms ([`CommitId`], [`Commit`]); no
 //! `git2` type leaves this module.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::config::Author;
@@ -139,6 +140,71 @@ impl GitHistory {
             Some(commit) => Ok(Some(info(&commit))),
             None => Ok(None),
         }
+    }
+
+    /// Rewrites the worktree from the tree of `target`, then commits the
+    /// result as a new commit. History is never rewritten, so a restore can
+    /// itself be undone.
+    ///
+    /// Files tracked at the current tip but absent from `target` are deleted.
+    /// Untracked files are left alone: they are not part of history.
+    pub fn restore(&mut self, target: CommitId) -> Result<Option<CommitId>> {
+        let workdir = self
+            .repo
+            .workdir()
+            .ok_or_else(|| VaultError::Git {
+                message: "the repository has no working directory".to_owned(),
+            })?
+            .to_path_buf();
+
+        // Scoped so the borrow of the repository ends before the commit below.
+        let files = {
+            let commit = self.repo.find_commit(target.0).map_err(VaultError::git)?;
+            let tree = commit.tree().map_err(VaultError::git)?;
+            let mut files: BTreeMap<String, git2::Oid> = BTreeMap::new();
+
+            tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+                if entry.kind() == Some(git2::ObjectType::Blob)
+                    && let Ok(name) = entry.name()
+                {
+                    files.insert(format!("{root}{name}"), entry.id());
+                }
+                git2::TreeWalkResult::Ok
+            })
+            .map_err(VaultError::git)?;
+
+            files
+        };
+
+        // Files known to the index but missing from the target tree are
+        // deleted, which is what makes a restore remove later additions.
+        let index = self.repo.index().map_err(VaultError::git)?;
+        let tracked: Vec<String> = index
+            .iter()
+            .map(|entry| String::from_utf8_lossy(&entry.path).into_owned())
+            .collect();
+
+        for path in tracked {
+            if !files.contains_key(&path) {
+                let absolute = workdir.join(&path);
+                if absolute.is_file() {
+                    std::fs::remove_file(&absolute).map_err(|e| VaultError::io(&absolute, e))?;
+                }
+            }
+        }
+
+        for (path, oid) in &files {
+            let blob = self.repo.find_blob(*oid).map_err(VaultError::git)?;
+            let absolute = workdir.join(path);
+
+            if let Some(parent) = absolute.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| VaultError::io(parent, e))?;
+            }
+            std::fs::write(&absolute, blob.content()).map_err(|e| VaultError::io(&absolute, e))?;
+        }
+
+        let short: String = target.to_hex().chars().take(7).collect();
+        self.commit_all(&format!("Restore {short}"))
     }
 
     /// True when the worktree differs from HEAD. Ignored files are excluded.

@@ -194,6 +194,14 @@ impl Vault {
             .commit_all(&format!("Delete {}", rel.display()))
     }
 
+    /// Restores the vault to the tree of `commit`, as a new commit.
+    ///
+    /// Nothing is destroyed: the restored state can be undone by restoring a
+    /// later commit, or by checking out the previous tip.
+    pub fn restore(&mut self, commit: CommitId) -> Result<Option<CommitId>> {
+        self.history.restore(commit)
+    }
+
     /// Commits pending changes with a custom message.
     pub fn commit(&mut self, message: &str) -> Result<Option<CommitId>> {
         self.history.commit_all(message)

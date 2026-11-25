@@ -202,3 +202,59 @@ fn config_is_read_and_validated_on_open() {
     .unwrap();
     assert!(matches!(Vault::open(&path), Err(VaultError::Config { .. })));
 }
+
+#[test]
+fn restoring_a_commit_brings_the_vault_back() {
+    let tmp = tempdir().unwrap();
+    let mut vault = Vault::create(tmp.path().join("vault")).unwrap();
+
+    vault.write_file("a.md", "v1").unwrap();
+    let first = vault.history().last().unwrap().unwrap().id;
+
+    vault.write_file("a.md", "v2").unwrap();
+    vault.write_file("b.md", "b").unwrap();
+
+    let restored = vault.restore(first).unwrap().expect("restore must commit");
+
+    assert_eq!(vault.read("a.md").unwrap(), "v1");
+    assert!(!vault.root().join("b.md").exists());
+    assert_eq!(vault.history().last().unwrap().unwrap().id, restored);
+    assert!(
+        vault
+            .history()
+            .last()
+            .unwrap()
+            .unwrap()
+            .summary
+            .starts_with("Restore ")
+    );
+}
+
+#[test]
+fn restoring_leaves_untracked_files_alone() {
+    let tmp = tempdir().unwrap();
+    let mut vault = Vault::create(tmp.path().join("vault")).unwrap();
+
+    vault.write_file("a.md", "v1").unwrap();
+    let first = vault.history().last().unwrap().unwrap().id;
+    vault.write_file("a.md", "v2").unwrap();
+
+    std::fs::write(vault.root().join("untracked.md"), "keep me").unwrap();
+
+    vault.restore(first).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(vault.root().join("untracked.md")).unwrap(),
+        "keep me"
+    );
+}
+
+#[test]
+fn restoring_the_current_state_creates_no_commit() {
+    let tmp = tempdir().unwrap();
+    let mut vault = Vault::create(tmp.path().join("vault")).unwrap();
+    vault.write_file("a.md", "a").unwrap();
+    let head = vault.history().last().unwrap().unwrap().id;
+
+    assert!(vault.restore(head).unwrap().is_none());
+}

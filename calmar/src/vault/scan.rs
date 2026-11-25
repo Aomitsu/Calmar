@@ -1,16 +1,24 @@
-//! Finding notes in the vault and resolving the links between them.
+//! Finding notes and folders in the vault, and resolving links between notes.
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
 
+use crate::config::VaultConfig;
 use crate::error::{Result, VaultError};
 use crate::markdown;
 use crate::note::{Link, Note};
 use crate::path::{RelPath, to_display};
 
 use super::Vault;
+
+/// Everything found under the notes directory.
+#[derive(Debug, Default)]
+struct Scan {
+    notes: Vec<String>,
+    folders: Vec<String>,
+}
 
 impl Vault {
     /// Every note, sorted by path.
@@ -19,11 +27,11 @@ impl Vault {
     /// are returned. Directories named in `ignored_dirs` are skipped, as are
     /// `.git`, `.calmar`, and the attachments directory.
     pub fn list(&self) -> Result<Vec<Note>> {
-        let paths = self.note_paths()?;
-        let known: HashSet<&str> = paths.iter().map(String::as_str).collect();
+        let scan = self.scan()?;
+        let known: HashSet<&str> = scan.notes.iter().map(String::as_str).collect();
 
-        let mut notes = Vec::with_capacity(paths.len());
-        for path in &paths {
+        let mut notes = Vec::with_capacity(scan.notes.len());
+        for path in &scan.notes {
             let absolute = self.root().join(path);
             let source = fs::read_to_string(&absolute).map_err(|e| VaultError::io(&absolute, e))?;
             let links = links_in(path, &source, |target| known.contains(target));
@@ -72,8 +80,21 @@ impl Vault {
             .collect())
     }
 
+    /// Folders under `notes_dir`, including `notes_dir` itself and its
+    /// ancestors, so the result can be displayed as a tree.
+    ///
+    /// Empty folders are included: they exist on disk even though Git does not
+    /// track them.
+    pub fn folders(&self) -> Result<Vec<String>> {
+        Ok(self.scan()?.folders)
+    }
+
     /// Vault-relative paths of every note, sorted.
     pub(crate) fn note_paths(&self) -> Result<Vec<String>> {
+        Ok(self.scan()?.notes)
+    }
+
+    fn scan(&self) -> Result<Scan> {
         let attachments =
             crate::path::config_dir(self.root(), &self.config.attachments_dir, "attachments_dir")?;
         let attachments = attachments
@@ -81,17 +102,28 @@ impl Vault {
             .map(to_display)
             .unwrap_or_default();
 
-        let mut paths = Vec::new();
+        let mut scan = Scan::default();
         walk(
             self.root(),
             &self.config.notes_dir,
             &self.config,
             &attachments,
-            &mut paths,
+            &mut scan,
         )?;
-        paths.sort();
-        paths.dedup();
-        Ok(paths)
+
+        // `walk` starts inside `notes_dir`, so the directory itself has to be
+        // added back when it is not the vault root.
+        let notes_dir = to_display(&self.config.notes_dir);
+        if !notes_dir.is_empty() && notes_dir != "." {
+            scan.folders.push(notes_dir);
+        }
+
+        add_ancestors(&mut scan.folders);
+        scan.notes.sort();
+        scan.notes.dedup();
+        scan.folders.sort();
+        scan.folders.dedup();
+        Ok(scan)
     }
 }
 
@@ -114,9 +146,9 @@ fn links_in(note_path: &str, source: &str, is_note: impl Fn(&str) -> bool) -> Ve
 fn walk(
     root: &Path,
     relative: &Path,
-    config: &crate::config::VaultConfig,
+    config: &VaultConfig,
     attachments: &str,
-    out: &mut Vec<String>,
+    out: &mut Scan,
 ) -> Result<()> {
     let directory = root.join(relative);
     let entries = match fs::read_dir(&directory) {
@@ -143,16 +175,32 @@ fn walk(
             if is_ignored(&name, &path, config) || to_display(&path) == attachments {
                 continue;
             }
+            out.folders.push(to_display(&path));
             walk(root, &path, config, attachments, out)?;
         } else if file_type.is_file() && is_note(&name, config) {
-            out.push(to_display(&path));
+            out.notes.push(to_display(&path));
         }
     }
 
     Ok(())
 }
 
-fn is_ignored(name: &OsStr, relative: &Path, config: &crate::config::VaultConfig) -> bool {
+/// Adds missing parents, so `a/b/c` always comes with `a` and `a/b`.
+fn add_ancestors(folders: &mut Vec<String>) {
+    let mut extra = Vec::new();
+
+    for folder in folders.iter() {
+        let mut current = folder.as_str();
+        while let Some((parent, _)) = current.rsplit_once('/') {
+            extra.push(parent.to_owned());
+            current = parent;
+        }
+    }
+
+    folders.extend(extra);
+}
+
+fn is_ignored(name: &OsStr, relative: &Path, config: &VaultConfig) -> bool {
     let name = name.to_string_lossy();
     if name == ".git" || name == ".calmar" {
         return true;
@@ -164,7 +212,7 @@ fn is_ignored(name: &OsStr, relative: &Path, config: &crate::config::VaultConfig
     })
 }
 
-fn is_note(name: &OsStr, config: &crate::config::VaultConfig) -> bool {
+fn is_note(name: &OsStr, config: &VaultConfig) -> bool {
     let Some(extension) = Path::new(name).extension() else {
         return false;
     };
