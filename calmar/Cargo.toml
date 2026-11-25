@@ -1,0 +1,9 @@
+[package]
+name = "calmar"
+description = "Markdown note vault with Git-backed history"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
