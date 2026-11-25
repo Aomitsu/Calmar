@@ -213,6 +213,11 @@ impl Workspace {
                 "New folder",
                 Message::StartNew(NewKind::Folder)
             ),
+            action(
+                lucide::calendar().size(13),
+                "Daily note",
+                Message::DailyNote
+            ),
             action(lucide::pencil().size(13), "Rename", Message::StartRename),
             action(lucide::trash().size(13), "Delete", Message::AskDelete),
             action(lucide::history().size(13), "History", Message::OpenHistory),

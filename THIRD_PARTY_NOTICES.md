@@ -20,6 +20,7 @@ version in use at build time.
 | libgit2-sys | 0.18 | MIT OR Apache-2.0 |
 | thiserror | 2.0 | MIT OR Apache-2.0 |
 | dunce | 1.0 | CC0-1.0 OR MIT-0 OR Apache-2.0 |
+| jiff | 1.0 | Unlicense OR MIT |
 | pulldown-cmark | 0.12 | MIT |
 
 Transitive dependencies are covered by their own licenses, which Cargo

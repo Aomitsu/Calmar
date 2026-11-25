@@ -30,6 +30,7 @@ pub enum Message {
     CancelOverlay,
     OpenHistory,
     Restore(CommitId),
+    DailyNote,
     Editor(text_editor::Action),
     Save,
     Refresh,
@@ -198,6 +199,7 @@ impl Workspace {
             Message::CancelOverlay => self.overlay = None,
             Message::OpenHistory => self.attempt(Self::open_history),
             Message::Restore(commit) => self.attempt(|workspace| workspace.restore(commit)),
+            Message::DailyNote => self.attempt(Self::open_daily_note),
             Message::Editor(action) => {
                 self.content.perform(action);
                 self.dirty = true;
@@ -260,17 +262,71 @@ impl Workspace {
     }
 
     fn save(&mut self) -> calmar::Result<()> {
+        let text = self.content.text();
+
         let Some(path) = self.selected_note.clone() else {
+            // Typing before choosing a note: saving gives the draft a name.
+            if text.trim().is_empty() {
+                return Ok(());
+            }
+
+            let path = child_path(&self.selected_folder, &self.untitled_note_name());
+            let _ = self.vault.write_file(&path, &text)?;
+            self.reload()?;
+            self.selected_note = Some(path.clone());
+            self.active = Some(Selection::Note(path.clone()));
+            self.dirty = false;
+            self.status = Some(format!("Saved {path}"));
+
             return Ok(());
         };
+
         if !self.dirty {
             return Ok(());
         }
 
-        let text = self.content.text();
         let _ = self.vault.write_file(&path, &text)?;
         self.dirty = false;
         self.status = Some(format!("Saved {path}"));
+
+        Ok(())
+    }
+
+    /// `Sans titre`, `Sans titre2`, and so on, in the selected folder.
+    fn untitled_note_name(&self) -> String {
+        let folder = self.vault.root().join(&self.selected_folder);
+        let mut name = "Sans titre.md".to_owned();
+        let mut index = 2;
+
+        while folder.join(&name).exists() {
+            name = format!("Sans titre{index}.md");
+            index += 1;
+        }
+
+        name
+    }
+
+    /// Creates or opens `notebook/YYYY/MM/DD.md`.
+    fn open_daily_note(&mut self) -> calmar::Result<()> {
+        self.save()?;
+
+        let now = jiff::ZonedDateTime::now();
+        let path = format!(
+            "notebook/{}/{:02}/{:02}.md",
+            now.year(),
+            now.month(),
+            now.day()
+        );
+
+        if !self.vault.root().join(&path).is_file() {
+            let _ = self.vault.write_file(&path, "")?;
+            self.reload()?;
+        }
+
+        self.selected_folder = parent_of(&path).to_owned();
+        self.active = Some(Selection::Note(path.clone()));
+        self.selected_note = None;
+        self.select_note(&path)?;
 
         Ok(())
     }
@@ -321,7 +377,11 @@ impl Workspace {
 
         let result = match kind {
             NewKind::Note => {
-                let name = self.entered_name("untitled", ".md");
+                let name = if self.name.trim().is_empty() {
+                    self.untitled_note_name()
+                } else {
+                    self.name.trim().to_owned()
+                };
                 self.create_note(&name)
             }
             NewKind::Folder => {
@@ -938,7 +998,84 @@ mod tests {
         send(&mut fixture.workspace, Message::StartNew(NewKind::Note));
         send(&mut fixture.workspace, Message::SubmitName);
 
-        assert!(fixture.workspace.vault.root().join("untitled.md").is_file());
+        assert!(
+            fixture
+                .workspace
+                .vault
+                .root()
+                .join("Sans titre.md")
+                .is_file()
+        );
+    }
+
+    #[test]
+    fn saving_a_draft_creates_a_sans_titre_note() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("vault");
+        Vault::create(&root).unwrap();
+
+        let mut workspace = Workspace::new(Vault::open(&root).unwrap());
+        assert!(workspace.selected_note.is_none());
+
+        workspace.content = text_editor::Content::with_text("# brouillon\n");
+        workspace.dirty = true;
+        send(&mut workspace, Message::Save);
+
+        assert_eq!(workspace.selected_note.as_deref(), Some("Sans titre.md"));
+        assert_eq!(
+            workspace.vault.read("Sans titre.md").unwrap(),
+            "# brouillon\n"
+        );
+        assert!(!workspace.dirty);
+    }
+
+    #[test]
+    fn sans_titre_names_increment() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("vault");
+        Vault::create(&root).unwrap();
+        let mut workspace = Workspace::new(Vault::open(&root).unwrap());
+
+        for (index, content) in ["first\n", "second\n", "third\n"].iter().enumerate() {
+            workspace.selected_note = None;
+            workspace.content = text_editor::Content::with_text(content);
+            workspace.dirty = true;
+            send(&mut workspace, Message::Save);
+
+            let expected = match index {
+                0 => "Sans titre.md".to_owned(),
+                other => format!("Sans titre{}.md", other + 1),
+            };
+            assert!(workspace.vault.root().join(&expected).is_file());
+        }
+    }
+
+    #[test]
+    fn the_daily_note_is_created_once_and_selected() {
+        let mut fixture = fixture();
+
+        send(&mut fixture.workspace, Message::DailyNote);
+
+        let path = fixture.workspace.selected_note.clone().unwrap();
+        let parts: Vec<&str> = path.split('/').collect();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts[0], "notebook");
+        assert_eq!(parts[1].len(), 4);
+        assert_eq!(parts[2].len(), 2);
+        assert!(parts[3].ends_with(".md"));
+        assert!(fixture.workspace.vault.root().join(&path).is_file());
+
+        // A second click reuses the same note instead of creating another.
+        let before = fixture.workspace.vault.history().log(50).unwrap().len();
+        send(&mut fixture.workspace, Message::DailyNote);
+        assert_eq!(
+            fixture.workspace.selected_note.as_deref(),
+            Some(path.as_str())
+        );
+        assert_eq!(
+            fixture.workspace.vault.history().log(50).unwrap().len(),
+            before
+        );
     }
 
     #[test]
